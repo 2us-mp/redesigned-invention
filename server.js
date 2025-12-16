@@ -67,3 +67,5 @@ app.get("/me", (req, res) => {
 });
 
 app.listen(8787, () => console.log("Auth server running"));
+const PORT = process.env.PORT || 8787;
+app.listen(PORT, () => console.log("Auth server running on", PORT));
