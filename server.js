@@ -2,70 +2,96 @@ import express from "express";
 import fetch from "node-fetch";
 import jwt from "jsonwebtoken";
 import cors from "cors";
-import fs from "fs";
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-const USERS_FILE = "./users.json";
-const JWT_SECRET = process.env.JWT_SECRET;
+const PORT = process.env.PORT || 3000;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
-if (!fs.existsSync(USERS_FILE)) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify([]));
-}
-
-function loadUsers() {
-  return JSON.parse(fs.readFileSync(USERS_FILE));
-}
-
-function saveUsers(users) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-}
-
-app.post("/auth/google", async (req, res) => {
-  const { credential } = req.body;
-
-  const r = await fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + credential);
-  const data = await r.json();
-
-  if (data.aud !== GOOGLE_CLIENT_ID) {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-
-  let users = loadUsers();
-  let user = users.find(u => u.sub === data.sub);
-
-  if (!user) {
-    user = {
-      sub: data.sub,
-      email: data.email,
-      name: data.name,
-      picture: data.picture,
-      created: Date.now()
-    };
-    users.push(user);
-    saveUsers(users);
-  }
-
-  const token = jwt.sign(user, JWT_SECRET, { expiresIn: "7d" });
-
-  res.json({ token, user });
+/* ------------------ HEALTH ------------------ */
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true });
 });
 
-app.get("/me", (req, res) => {
-  const auth = req.headers.authorization;
-  if (!auth) return res.status(401).end();
+/* ------------------ GOOGLE AUTH ------------------ */
+app.post("/api/auth/google", async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) {
+      return res.status(400).json({ error: "Missing credential" });
+    }
+
+    const googleRes = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`
+    );
+    const profile = await googleRes.json();
+
+    if (profile.aud !== GOOGLE_CLIENT_ID) {
+      return res.status(401).json({ error: "Invalid Google token" });
+    }
+
+    const user = {
+      id: profile.sub,
+      email: profile.email,
+      name: profile.name,
+      picture: profile.picture,
+    };
+
+    const token = jwt.sign(user, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token });
+  } catch (err) {
+    res.status(500).json({ error: "Google auth failed" });
+  }
+});
+
+/* ------------------ AUTH MIDDLEWARE ------------------ */
+function auth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ error: "No auth" });
 
   try {
-    const user = jwt.verify(auth.split(" ")[1], JWT_SECRET);
-    res.json(user);
+    const token = header.split(" ")[1];
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
   } catch {
-    res.status(401).end();
+    res.status(401).json({ error: "Invalid token" });
   }
+}
+
+/* ------------------ CURRENT USER ------------------ */
+app.get("/api/me", auth, (req, res) => {
+  res.json(req.user);
 });
 
-app.listen(8787, () => console.log("Auth server running"));
-const PORT = process.env.PORT || 8787;
-app.listen(PORT, () => console.log("Auth server running on", PORT));
+/* ------------------ iTUNES (UNCHANGED CORE) ------------------ */
+app.get("/api/itunes/search", async (req, res) => {
+  const { term, entity = "song", limit = 24 } = req.query;
+  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(
+    term
+  )}&entity=${entity}&limit=${limit}`;
+
+  const r = await fetch(url);
+  const data = await r.text();
+  res.set("Content-Type", "application/json");
+  res.send(data);
+});
+
+app.get("/api/itunes/lookup", async (req, res) => {
+  const { id, entity } = req.query;
+  const url = `https://itunes.apple.com/lookup?id=${id}${
+    entity ? `&entity=${entity}` : ""
+  }`;
+
+  const r = await fetch(url);
+  const data = await r.text();
+  res.set("Content-Type", "application/json");
+  res.send(data);
+});
+
+/* ------------------ START ------------------ */
+app.listen(PORT, () => {
+  console.log("Server running on", PORT);
+});
