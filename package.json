@@ -1,14 +1,21 @@
 {
   "name": "wired-center-auth",
   "version": "1.0.0",
+  "description": "Wired Center Google OAuth authentication server",
   "type": "module",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "express": "^4.19.2",
     "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "express-session": "^1.17.3",
     "jsonwebtoken": "^9.0.2",
-    "node-fetch": "^3.3.2"
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0"
   }
 }
