@@ -1,97 +1,88 @@
-import express from "express";
-import fetch from "node-fetch";
-import jwt from "jsonwebtoken";
-import cors from "cors";
+import express from 'express';
+import session from 'express-session';
+import passport from 'passport';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
+import jwt from 'jsonwebtoken';
+import cors from 'cors';
 
 const app = express();
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+/* ===================== CONFIG ===================== */
 
-/* ------------------ HEALTH ------------------ */
-app.get("/api/health", (req, res) => {
+const FRONTEND_URL = 'https://wcv3.pages.dev';
+const CALLBACK_URL =
+  'https://wired-center-auth.onrender.com/auth/google/callback';
+
+/* ===================== MIDDLEWARE ===================== */
+
+app.use(cors({
+  origin: FRONTEND_URL,
+  credentials: true
+}));
+
+app.use(session({
+  secret: 'wired-center-secret',
+  resave: false,
+  saveUninitialized: false
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+/* ===================== PASSPORT ===================== */
+
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((obj, done) => done(null, obj));
+
+passport.use(new GoogleStrategy(
+  {
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: CALLBACK_URL
+  },
+  async (_accessToken, _refreshToken, profile, done) => {
+    const user = {
+      id: profile.id,
+      email: profile.emails?.[0]?.value,
+      name: profile.displayName,
+      avatar: profile.photos?.[0]?.value
+    };
+
+    return done(null, user);
+  }
+));
+
+/* ===================== ROUTES ===================== */
+
+/** Health check (for Render) */
+app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-/* ------------------ GOOGLE AUTH ------------------ */
-app.post("/api/auth/google", async (req, res) => {
-  try {
-    const { credential } = req.body;
-    if (!credential) {
-      return res.status(400).json({ error: "Missing credential" });
-    }
+/** Start Google login */
+app.get('/auth/google',
+  passport.authenticate('google', {
+    scope: ['profile', 'email']
+  })
+);
 
-    const googleRes = await fetch(
-      `https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`
+/** 🔴 THIS WAS MISSING BEFORE 🔴 */
+app.get('/auth/google/callback',
+  passport.authenticate('google', { session: false }),
+  (req, res) => {
+    const token = jwt.sign(req.user, 'wired-center-jwt', {
+      expiresIn: '7d'
+    });
+
+    res.redirect(
+      `${FRONTEND_URL}/login-success?token=${token}`
     );
-    const profile = await googleRes.json();
-
-    if (profile.aud !== GOOGLE_CLIENT_ID) {
-      return res.status(401).json({ error: "Invalid Google token" });
-    }
-
-    const user = {
-      id: profile.sub,
-      email: profile.email,
-      name: profile.name,
-      picture: profile.picture,
-    };
-
-    const token = jwt.sign(user, JWT_SECRET, { expiresIn: "7d" });
-    res.json({ token });
-  } catch (err) {
-    res.status(500).json({ error: "Google auth failed" });
   }
-});
+);
 
-/* ------------------ AUTH MIDDLEWARE ------------------ */
-function auth(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header) return res.status(401).json({ error: "No auth" });
+/* ===================== START ===================== */
 
-  try {
-    const token = header.split(" ")[1];
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
-  }
-}
-
-/* ------------------ CURRENT USER ------------------ */
-app.get("/api/me", auth, (req, res) => {
-  res.json(req.user);
-});
-
-/* ------------------ iTUNES (UNCHANGED CORE) ------------------ */
-app.get("/api/itunes/search", async (req, res) => {
-  const { term, entity = "song", limit = 24 } = req.query;
-  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(
-    term
-  )}&entity=${entity}&limit=${limit}`;
-
-  const r = await fetch(url);
-  const data = await r.text();
-  res.set("Content-Type", "application/json");
-  res.send(data);
-});
-
-app.get("/api/itunes/lookup", async (req, res) => {
-  const { id, entity } = req.query;
-  const url = `https://itunes.apple.com/lookup?id=${id}${
-    entity ? `&entity=${entity}` : ""
-  }`;
-
-  const r = await fetch(url);
-  const data = await r.text();
-  res.set("Content-Type", "application/json");
-  res.send(data);
-});
-
-/* ------------------ START ------------------ */
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log(`Auth server running on ${PORT}`);
 });
